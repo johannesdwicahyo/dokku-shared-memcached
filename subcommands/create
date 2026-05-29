@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${DOKKU_TRACE:-}" == "1" ]] && set -x
+
+PLUGIN_ROOT="$(cd "$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")" && pwd)"
+# shellcheck source=config
+source "$PLUGIN_ROOT/config"
+# shellcheck source=functions
+source "$PLUGIN_ROOT/functions"
+
+shift || true  # drop the Dokku-provided "shared-memcached:<cmd>" arg
+
+name="${1:-}"
+if [[ -z "$name" ]]; then
+  echo "tenant name required: dokku $PLUGIN_COMMAND_PREFIX:create <name>" >&2
+  exit 2
+fi
+
+service_create "$name"
+printf 'MEMCACHED_URL=%s\n' "$(service_url)"
+printf 'MEMCACHED_KEY_PREFIX=%s:\n' "$name"
+echo "note: prefix EVERY key with \"$name:\" — isolation is by convention, not enforced."
+echo "note: shared best-effort cache — do not store secrets, tokens, or PII."
