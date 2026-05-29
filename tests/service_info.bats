@@ -10,8 +10,9 @@ setup() {
 }
 
 @test "service_info prints all fields including quota default" {
-  # tenant_scan -> one cachedump payload with two demo keys (10 + 22 bytes).
-  stub_response docker $'ITEM demo:a [10 b; 0 s]\r\nITEM demo:b [22 b; 0 s]\r\nEND'
+  # tenant_scan -> one metadump payload with two demo keys (10 + 22 bytes).
+  # `demo%3Aa` is the URL-encoded form of `demo:a` (`%3A` = `:`).
+  stub_response docker $'key=demo%3Aa exp=-1 la=0 cas=1 fetch=no cls=1 size=10 flags=0\nkey=demo%3Ab exp=-1 la=0 cas=2 fetch=no cls=1 size=22 flags=0\nEND'
   run service_info "demo"
   [[ "$status" -eq 0 ]]
   [[ "$output" == *"name=demo"* ]]

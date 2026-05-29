@@ -42,9 +42,9 @@ setup() {
 @test "service_destroy purges the prefix then removes the data dir" {
   service_create "demo"
   : >"$STUB_LOG"
-  # tenant_scan -> one cachedump payload returning two demo: keys; then the
-  # batched delete call.
-  stub_response docker $'ITEM demo:a [10 b; 0 s]\r\nITEM demo:b [20 b; 0 s]\r\nEND'
+  # tenant_scan -> one metadump payload returning two demo: keys; then
+  # the batched delete call. `demo%3Aa` is URL-encoded `demo:a`.
+  stub_response docker $'key=demo%3Aa exp=-1 la=0 cas=1 fetch=no cls=1 size=10 flags=0\nkey=demo%3Ab exp=-1 la=0 cas=2 fetch=no cls=1 size=20 flags=0\nEND'
   stub_response docker ''
   service_destroy "demo"
   [[ ! -d "$PLUGIN_DATA_ROOT/demo" ]]

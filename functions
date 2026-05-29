@@ -43,27 +43,60 @@ run_memcached_admin() {
     docker exec -i "$PLUGIN_CONTAINER_NAME" nc -w 2 127.0.0.1 "$PLUGIN_DB_PORT"
 }
 
-# Echo `ITEM <key> [<bytes> b; <ts> s]` lines whose key starts with <prefix>.
-# Memcached has no "list keys by prefix", so we cachedump every slab class
-# (1..63 is the max under the default growth factor) in one round trip and
-# filter. cachedump on an empty/invalid slab just returns END.
+# Echo lines of the form `<plain-text-key> <size_bytes>` whose key starts
+# with <prefix>. Memcached has no native "list keys by prefix", and the
+# legacy `stats cachedump` path is unreliable in modern memcached (it
+# only inspects the hot slab and frequently returns END even when keys
+# exist). `lru_crawler metadump all` is the supported alternative —
+# walks every LRU and returns one `key=<urlencoded> ... size=<bytes>`
+# line per key, terminated by `END`.
+#
+# Keys are returned URL-encoded (e.g. `tenant%3Ahello` for `tenant:hello`)
+# so we decode `%XX` back to the literal byte before prefix-matching.
 tenant_scan() {
-  local prefix="$1" payload="" s
-  for ((s = 1; s <= 63; s++)); do
-    payload+="stats cachedump $s 0"$'\r\n'
-  done
-  # grep -F "ITEM <prefix>" anchors on the literal "ITEM " + prefix, so
-  # "othername:" cannot match "name:".
-  run_memcached_admin "$payload" | grep -F "ITEM ${prefix}" || true
+  local prefix="$1"
+  # `lru_crawler metadump all` is the supported replacement for the
+  # flaky `stats cachedump`. Each key line is:
+  #   key=<urlencoded> exp=N la=N cas=N fetch=N cls=N size=N flags=N
+  # Memcached only URL-encodes bytes outside the printable-ASCII set
+  # (in practice: ":", "%", spaces). We decode `%XX` portably (no
+  # gawk-only strtonum) so this works on busybox awk / mawk too.
+  run_memcached_admin "lru_crawler metadump all" \
+    | awk -v prefix="$prefix" '
+        BEGIN {
+          OFS = " "
+          hex = "0123456789abcdef"
+        }
+        function fromhex(h,    i, c, n) {
+          n = 0
+          for (i = 1; i <= length(h); i++) {
+            c = tolower(substr(h, i, 1))
+            n = n * 16 + (index(hex, c) - 1)
+          }
+          return n
+        }
+        /^key=/ {
+          encoded = $1; sub(/^key=/, "", encoded)
+          size = ""
+          for (i = 2; i <= NF; i++) {
+            if ($i ~ /^size=/) { size = substr($i, 6); break }
+          }
+          plain = encoded
+          while (match(plain, /%[0-9A-Fa-f][0-9A-Fa-f]/)) {
+            b = fromhex(substr(plain, RSTART + 1, 2))
+            plain = substr(plain, 1, RSTART - 1) sprintf("%c", b) substr(plain, RSTART + RLENGTH)
+          }
+          if (index(plain, prefix) == 1) print plain, size
+        }
+      '
 }
 
 # Echo "<key_count> <byte_total>" for the tenant prefix.
 tenant_usage() {
-  local name="$1" line keys=0 bytes=0 b
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
+  local name="$1" key b keys=0 bytes=0
+  while IFS=' ' read -r key b; do
+    [[ -z "$key" ]] && continue
     keys=$((keys + 1))
-    b="$(printf '%s\n' "$line" | sed -n 's/.*\[\([0-9]*\) b;.*/\1/p')"
     [[ -n "$b" ]] && bytes=$((bytes + b))
   done < <(tenant_scan "${name}:")
   printf '%s %s\n' "$keys" "$bytes"
@@ -71,12 +104,13 @@ tenant_usage() {
 
 # Delete every key under "<name>:" — used by destroy and over-quota flush.
 # No native prefix flush exists, so we scan then batch the deletes.
+# tenant_scan now returns "<plain-key> <size>" lines (post-metadump
+# refactor), so the key is field 1, not field 2.
 purge_tenant_keys() {
-  local name="$1" line key payload=""
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    key="$(printf '%s\n' "$line" | awk '{print $2}')"
-    [[ -n "$key" ]] && payload+="delete $key"$'\r\n'
+  local name="$1" key _size payload=""
+  while IFS=' ' read -r key _size; do
+    [[ -z "$key" ]] && continue
+    payload+="delete $key"$'\r\n'
   done < <(tenant_scan "${name}:")
   [[ -n "$payload" ]] || return 0
   run_memcached_admin "$payload" >/dev/null || true

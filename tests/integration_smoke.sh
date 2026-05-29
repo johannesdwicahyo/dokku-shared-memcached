@@ -69,11 +69,18 @@ sudo -u dokku dokku shared-memcached:info "$TENANT2" | grep -q "Keys:.*0" \
 step "8. quota: tiny cap flushes the prefix on sweep"
 sudo -u dokku dokku shared-memcached:set-quota "$TENANT" 0 2>/dev/null \
   && { echo "FAIL: set-quota accepted 0"; exit 1; } || true
-# Set a 1 MB cap, then push the prefix over 1 MB with a big value.
+# Set a 1 MB cap, then push the prefix over 1 MB. Memcached rejects
+# single items > 1 MB by default (`SERVER_ERROR object too large for
+# cache`), so write many smaller keys instead: 12 × 100 KB ≈ 1.2 MB of
+# value data, comfortably over the 1 MB cap.
 sudo -u dokku dokku shared-memcached:set-quota "$TENANT" 1
-big="$(head -c 1100000 </dev/zero | tr '\0' 'x')"
-printf 'set %s:big 0 0 %s\r\n%s\r\nquit\r\n' "$TENANT" "${#big}" "$big" \
-  | docker exec -i "$C" nc -w 5 127.0.0.1 "$PORT" >/dev/null
+chunk="$(head -c 100000 </dev/zero | tr '\0' 'x')"
+batch=""
+for i in $(seq 1 12); do
+  batch+="set ${TENANT}:k${i} 0 0 ${#chunk}"$'\r\n'"${chunk}"$'\r\n'
+done
+batch+="quit"$'\r\n'
+printf '%s' "$batch" | docker exec -i "$C" nc -w 5 127.0.0.1 "$PORT" >/dev/null
 sudo -u dokku dokku shared-memcached:check-quotas | tee /tmp/.smoke-sweep
 grep -q "flushed name=$TENANT" /tmp/.smoke-sweep \
   || { echo "FAIL: sweep didn't flush over-cap tenant"; exit 1; }

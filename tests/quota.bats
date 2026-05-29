@@ -42,9 +42,9 @@ setup() {
 @test "service_check_quota flushes the prefix when over the byte cap" {
   printf '1' >"$PLUGIN_DATA_ROOT/demo/QUOTA_MB"   # 1 MB cap
   # First scan (usage) -> one key worth 2 MB, over cap.
-  stub_response docker $'ITEM demo:big [2097152 b; 0 s]\r\nEND'
+  stub_response docker $'key=demo%3Abig exp=-1 la=0 cas=1 fetch=no cls=20 size=2097152 flags=0\nEND'
   # purge re-scans -> same key...
-  stub_response docker $'ITEM demo:big [2097152 b; 0 s]\r\nEND'
+  stub_response docker $'key=demo%3Abig exp=-1 la=0 cas=1 fetch=no cls=20 size=2097152 flags=0\nEND'
   # ...then the batched delete.
   stub_response docker ''
   run service_check_quota "demo"
@@ -57,7 +57,7 @@ setup() {
 
 @test "service_check_quota is silent and flushes nothing when under cap" {
   printf '10' >"$PLUGIN_DATA_ROOT/demo/QUOTA_MB"
-  stub_response docker $'ITEM demo:a [1024 b; 0 s]\r\nEND'
+  stub_response docker $'key=demo%3Aa exp=-1 la=0 cas=1 fetch=no cls=1 size=1024 flags=0\nEND'
   run service_check_quota "demo"
   [[ "$status" -eq 0 ]]
   [[ -z "$output" ]]
