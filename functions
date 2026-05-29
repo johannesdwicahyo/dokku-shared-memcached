@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Shared helpers for shared-memcached. Sourced — never executed directly.
+set -euo pipefail
+
+validate_name() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || return 1
+  [[ "$name" =~ $PLUGIN_NAME_REGEX ]] || return 1
+}
+
+service_exists() {
+  local name="$1"
+  [[ -d "$PLUGIN_DATA_ROOT/$name" ]]
+}
+
+service_list() {
+  [[ -d "$PLUGIN_DATA_ROOT" ]] || return 0
+  local d
+  for d in "$PLUGIN_DATA_ROOT"/*/; do
+    [[ -d "$d" ]] || continue
+    local name="${d%/}"
+    name="${name##*/}"
+    [[ "$name" == .* ]] && continue
+    # Anything starting with `_` is reserved for plugin internals.
+    [[ "$name" == _* ]] && continue
+    printf '%s\n' "$name"
+  done | sort
+}
+
+service_url() {
+  printf '%s:%s\n' "$PLUGIN_CONTAINER_NAME" "$PLUGIN_DB_PORT"
+}
+
+# Speak the memcached text protocol to the shared container and echo the reply.
+# Runs `nc` INSIDE the container against loopback, so the host needs no
+# memcached client and does not depend on the container hostname resolving
+# from the host. busybox `nc` ships in memcached:alpine. All callers route
+# through here. The payload arrives on stdin; `quit` closes the connection so
+# nc exits cleanly.
+run_memcached_admin() {
+  local payload="$1"
+  printf '%s\r\nquit\r\n' "$payload" | \
+    docker exec -i "$PLUGIN_CONTAINER_NAME" nc -w 2 127.0.0.1 "$PLUGIN_DB_PORT"
+}
+
+# Echo `ITEM <key> [<bytes> b; <ts> s]` lines whose key starts with <prefix>.
+# Memcached has no "list keys by prefix", so we cachedump every slab class
+# (1..63 is the max under the default growth factor) in one round trip and
+# filter. cachedump on an empty/invalid slab just returns END.
+tenant_scan() {
+  local prefix="$1" payload="" s
+  for ((s = 1; s <= 63; s++)); do
+    payload+="stats cachedump $s 0"$'\r\n'
+  done
+  # grep -F "ITEM <prefix>" anchors on the literal "ITEM " + prefix, so
+  # "othername:" cannot match "name:".
+  run_memcached_admin "$payload" | grep -F "ITEM ${prefix}" || true
+}
+
+# Echo "<key_count> <byte_total>" for the tenant prefix.
+tenant_usage() {
+  local name="$1" line keys=0 bytes=0 b
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    keys=$((keys + 1))
+    b="$(printf '%s\n' "$line" | sed -n 's/.*\[\([0-9]*\) b;.*/\1/p')"
+    [[ -n "$b" ]] && bytes=$((bytes + b))
+  done < <(tenant_scan "${name}:")
+  printf '%s %s\n' "$keys" "$bytes"
+}
+
+# Delete every key under "<name>:" — used by destroy and over-quota flush.
+# No native prefix flush exists, so we scan then batch the deletes.
+purge_tenant_keys() {
+  local name="$1" line key payload=""
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    key="$(printf '%s\n' "$line" | awk '{print $2}')"
+    [[ -n "$key" ]] && payload+="delete $key"$'\r\n'
+  done < <(tenant_scan "${name}:")
+  [[ -n "$payload" ]] || return 0
+  run_memcached_admin "$payload" >/dev/null || true
+}
+
+# Make sure the shared Memcached container is up. Idempotent. No volume:
+# memcached is volatile by design.
+ensure_shared_container() {
+  local existing
+  existing="$(docker ps --filter "name=^${PLUGIN_CONTAINER_NAME}$" --format '{{.Names}}' || true)"
+  if [[ -n "$existing" ]]; then
+    return 0
+  fi
+
+  docker network create "$PLUGIN_NETWORK_NAME" >/dev/null 2>&1 || true
+
+  docker run --detach \
+    --name "$PLUGIN_CONTAINER_NAME" \
+    --network "$PLUGIN_NETWORK_NAME" \
+    --restart always \
+    --memory "${PLUGIN_MEMCACHED_MB}m" \
+    "${PLUGIN_IMAGE}:${PLUGIN_IMAGE_VERSION}" \
+    memcached -m "$PLUGIN_MEMCACHED_MB" -p "$PLUGIN_DB_PORT" \
+    >/dev/null
+}
+
+service_create() {
+  local name="$1"
+  validate_name "$name" || { echo "invalid tenant name: $name" >&2; return 2; }
+  if service_exists "$name"; then
+    echo "service already exists: $name" >&2
+    return 3
+  fi
+  ensure_shared_container
+
+  # A tenant is pure config — a key prefix and a link list. Memcached needs
+  # no provisioning for a prefix to start working.
+  mkdir -p "$PLUGIN_DATA_ROOT/$name"
+  : >"$PLUGIN_DATA_ROOT/$name/LINKS"
+}
+
+service_destroy() {
+  local name="$1"
+  validate_name "$name" || { echo "invalid tenant name: $name" >&2; return 2; }
+  if ! service_exists "$name"; then
+    echo "service does not exist: $name" >&2
+    return 3
+  fi
+
+  purge_tenant_keys "$name"
+  rm -rf "${PLUGIN_DATA_ROOT:?}/$name"
+}
