@@ -140,6 +140,46 @@ service_get_quota_mb() {
   fi
 }
 
+service_set_quota() {
+  local name="$1" mb="${2:-}"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
+  if [[ -z "$mb" ]]; then
+    echo "usage: set-quota <name> <mb>" >&2
+    return 2
+  fi
+  [[ "$mb" =~ ^[1-9][0-9]*$ ]] || { echo "quota <mb> must be a positive integer: $mb" >&2; return 2; }
+  printf '%s' "$mb" >"$PLUGIN_DATA_ROOT/$name/QUOTA_MB"
+}
+
+service_unset_quota() {
+  local name="$1"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
+  rm -f "$PLUGIN_DATA_ROOT/$name/QUOTA_MB"
+}
+
+# Sweep one tenant: if its prefix exceeds the byte cap, flush the prefix and
+# log a line (captured by cron output for alerting). Memcached cannot make a
+# tenant read-only, so flushing is the enforcement lever. Silent when under.
+service_check_quota() {
+  local name="$1"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
+
+  local quota_mb usage keys bytes cap_bytes
+  quota_mb="$(service_get_quota_mb "$name")"
+  usage="$(tenant_usage "$name")"
+  keys="${usage% *}"
+  bytes="${usage#* }"
+  [[ -z "$keys" ]]  && keys=0
+  [[ -z "$bytes" ]] && bytes=0
+  cap_bytes=$((quota_mb * 1024 * 1024))
+
+  if (( bytes > cap_bytes )); then
+    purge_tenant_keys "$name"
+    printf 'flushed name=%s keys=%s bytes=%s cap_bytes=%s\n' \
+      "$name" "$keys" "$bytes" "$cap_bytes"
+  fi
+}
+
 service_info() {
   local name="$1"
   if ! service_exists "$name"; then
