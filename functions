@@ -250,3 +250,21 @@ service_unlink() {
     mv "${links_file}.tmp" "$links_file"
   fi
 }
+
+# Per-tenant export/import is a v0.2 stretch goal — see CLAUDE.md. Memcached
+# is a volatile cache with no per-key auth and no native prefix dump, so a
+# correct per-tenant snapshot needs a cachedump-walk that serialises every
+# value/flag/TTL. These stubs keep the CLI surface stable until then.
+service_export() {
+  local name="$1"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
+  echo "shared-memcached:export is not implemented in v0.1.0 (per-tenant backup is a v0.2 stretch goal); memcached is a volatile cache — back it with your source of truth, not snapshots" >&2
+  return 1
+}
+
+service_import() {
+  local name="$1"
+  service_exists "$name" || { echo "service does not exist: $name" >&2; return 3; }
+  echo "shared-memcached:import is not implemented in v0.1.0 (per-tenant backup is a v0.2 stretch goal)" >&2
+  return 1
+}
