@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${DOKKU_TRACE:-}" == "1" ]] && set -x
+
+PLUGIN_ROOT="$(cd "$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")" && pwd)"
+# shellcheck source=config
+source "$PLUGIN_ROOT/config"
+
+cat <<EOF
+Usage: dokku $PLUGIN_COMMAND_PREFIX:<command> [args]
+
+Commands:
+  $PLUGIN_COMMAND_PREFIX:create <name>                  Register a tenant (allocate key prefix <name>:).
+  $PLUGIN_COMMAND_PREFIX:destroy <name> -f              Flush the prefix and drop tenant config.
+  $PLUGIN_COMMAND_PREFIX:link <name> <app>              Set MEMCACHED_URL + MEMCACHED_KEY_PREFIX on <app>.
+  $PLUGIN_COMMAND_PREFIX:unlink <name> <app>            Remove those vars from <app>.
+  $PLUGIN_COMMAND_PREFIX:list                           List all tenants on this host.
+  $PLUGIN_COMMAND_PREFIX:info <name>                    Tenant prefix, key/byte usage, quota, linked apps.
+  $PLUGIN_COMMAND_PREFIX:connect <name>                 Open an admin nc session to the shared memcached.
+  $PLUGIN_COMMAND_PREFIX:set-quota <name> <mb>          Set the per-tenant byte cap (MB).
+  $PLUGIN_COMMAND_PREFIX:unset-quota <name>             Clear the override; revert to default.
+  $PLUGIN_COMMAND_PREFIX:check-quotas                   Run the quota sweep manually (auto-runs every 5min).
+  $PLUGIN_COMMAND_PREFIX:export <name>                  [stretch goal — not in v0.1.0]
+  $PLUGIN_COMMAND_PREFIX:import <name>                  [stretch goal — not in v0.1.0]
+  $PLUGIN_COMMAND_PREFIX:help                           Show this help text.
+
+Tenant isolation: each tenant gets a key prefix "<name>:" exposed to its app
+as MEMCACHED_KEY_PREFIX. Memcached has NO per-tenant auth — isolation is by
+convention. A misbehaving app can read another tenant's keys by guessing the
+prefix. SECURITY: this is best-effort shared cache. Do not store secrets,
+tokens, or PII. Over-quota prefixes are flushed by the periodic sweep.
+EOF

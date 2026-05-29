@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${DOKKU_TRACE:-}" == "1" ]] && set -x
+
+PLUGIN_ROOT="$(cd "$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")" && pwd)"
+# shellcheck source=config
+source "$PLUGIN_ROOT/config"
+# shellcheck source=functions
+source "$PLUGIN_ROOT/functions"
+
+shift || true
+
+name="${1:-}"
+flag="${2:-}"
+if [[ -z "$name" ]]; then
+  echo "usage: dokku $PLUGIN_COMMAND_PREFIX:connect <name> [--print-only]" >&2
+  exit 2
+fi
+if ! service_exists "$name"; then
+  echo "service does not exist: $name" >&2
+  exit 3
+fi
+
+echo "admin session on the SHARED memcached — memcached has no per-tenant auth." >&2
+echo "this connection sees ALL tenants' keys; \"$name\"'s keys are prefixed \"$name:\"." >&2
+
+if [[ "$flag" == "--print-only" ]]; then
+  printf 'docker exec -it %s nc 127.0.0.1 %s\n' \
+    "$PLUGIN_CONTAINER_NAME" "$PLUGIN_DB_PORT"
+  exit 0
+fi
+
+exec docker exec -it "$PLUGIN_CONTAINER_NAME" nc 127.0.0.1 "$PLUGIN_DB_PORT"

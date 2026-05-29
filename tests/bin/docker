@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Stub: logs args (and any stdin payload) to $STUB_LOG, optionally returns a
+# canned response queued via stub_response.
+set -euo pipefail
+
+# Capture the memcached protocol payload the plugin pipes in on stdin, if any.
+payload=""
+if [[ ! -t 0 ]]; then
+  payload="$(cat)"
+fi
+
+printf 'docker %s\n' "$*" >>"${STUB_LOG:-/dev/null}"
+if [[ -n "$payload" ]]; then
+  # Flatten CR/LF to spaces so each invocation is one greppable log line.
+  printf 'docker-stdin %s\n' "$(printf '%s' "$payload" | tr '\r\n' '  ')" \
+    >>"${STUB_LOG:-/dev/null}"
+fi
+
+queue="${STUB_RESPONSES_DIR:-}/docker.queue"
+if [[ -f "$queue" ]]; then
+  body="$(awk 'BEGIN{p=1} /^---END---$/{exit} {if(p)print}' "$queue")"
+  tail -n +"$(($(grep -n '^---END---$' "$queue" | head -n1 | cut -d: -f1) + 1))" \
+    "$queue" >"$queue.next" 2>/dev/null || : >"$queue.next"
+  mv "$queue.next" "$queue"
+  printf '%s\n' "$body"
+fi
+exit 0

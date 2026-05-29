@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Plugin identity
+PLUGIN_COMMAND_PREFIX="shared-memcached"
+PLUGIN_SERVICE="shared-memcached"
+
+# Shared Memcached container
+PLUGIN_IMAGE="memcached"
+PLUGIN_IMAGE_VERSION="alpine"
+PLUGIN_CONTAINER_NAME="dokku-shared-memcached"
+PLUGIN_NETWORK_NAME="dokku-shared-memcached"
+PLUGIN_DB_PORT="11211"
+
+# Host-wide cache size cap for the shared container (memcached -m, in MB).
+PLUGIN_MEMCACHED_MB="${PLUGIN_MEMCACHED_MB:-256}"
+
+# Filesystem layout (overrideable for tests)
+PLUGIN_DATA_ROOT="${PLUGIN_DATA_ROOT:-/var/lib/dokku/services/shared-memcached}"
+
+# Default per-tenant byte cap (MB). Memcached has no native per-key auth, so
+# this is enforced by the check-quotas sweep, not by the server.
+PLUGIN_DEFAULT_QUOTA_MB="${PLUGIN_DEFAULT_QUOTA_MB:-25}"
+
+# Tenant name validation. Lowercase alpha start, [a-z0-9_-], 1..31 chars.
+# The name doubles as the key prefix, so keep it free of characters that have
+# meaning in the memcached text protocol (no spaces/control chars) or globs.
+PLUGIN_NAME_REGEX='^[a-z][a-z0-9_-]{0,30}$'
+
+export PLUGIN_COMMAND_PREFIX PLUGIN_SERVICE \
+       PLUGIN_IMAGE PLUGIN_IMAGE_VERSION \
+       PLUGIN_CONTAINER_NAME PLUGIN_NETWORK_NAME PLUGIN_DB_PORT \
+       PLUGIN_MEMCACHED_MB PLUGIN_DATA_ROOT \
+       PLUGIN_DEFAULT_QUOTA_MB PLUGIN_NAME_REGEX

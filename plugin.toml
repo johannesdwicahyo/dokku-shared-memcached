@@ -1,0 +1,7 @@
+[plugin]
+name = "shared-memcached"
+description = "Dokku plugin: shared multi-tenant Memcached on a single host"
+version = "0.1.0"
+license = "MIT"
+
+[plugin.config]
