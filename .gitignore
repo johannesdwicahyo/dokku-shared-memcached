@@ -11,3 +11,8 @@ tests/coverage/
 
 # local-only test scratch
 /tmp-*
+
+# internal notes stay local
+/CLAUDE.md
+/.claude/
+/docs/superpowers/
